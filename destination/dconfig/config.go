@@ -6,4 +6,6 @@ type Config struct {
 	RabbitMQConsumerConnection    RabbitMQConsumerConnection    `koanf:"rabbitmq_consumer_connection"`
 	ConsumerTopic                 ConsumerTopic                 `koanf:"consumer_topic"`
 	RedisTaskIdempotency          RedisTaskIdempotency          `koanf:"redis_idempotency"`
+	EventManager                  EventManager                  `koanf:"event_manager"`
+	TaskManager                   TaskManager                   `koanf:"task_manager"`
 }

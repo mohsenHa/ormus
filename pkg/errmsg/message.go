@@ -11,4 +11,6 @@ const (
 	ErrorMsgInvalidInput  = "invalid input"
 	ErrBadRequest         = "Bad request"
 	ErrUserNotFound       = "user not found"
+	ErrToOpenChannel      = "failed to open channel"
+	ErrToCloseChannel     = "failed to close channel"
 )

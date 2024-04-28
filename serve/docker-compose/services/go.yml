@@ -2,6 +2,7 @@ version: '3.8'
 services:
   #Destination Service
   destination:
+    user: root
     build:
       context: .
       dockerfile: ./go/Dockerfile

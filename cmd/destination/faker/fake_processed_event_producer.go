@@ -25,7 +25,6 @@ func main() {
 	rmqConsumerConnConfig := config.C().Destination.RabbitMQConsumerConnection
 	conn, err := amqp.Dial(fmt.Sprintf("amqp://%s:%s@%s:%d/", rmqConsumerConnConfig.User,
 		rmqConsumerConnConfig.Password, rmqConsumerConnConfig.Host, rmqConsumerConnConfig.Port))
-	//conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 
 	defer func(conn *amqp.Connection) {
 		err = conn.Close()
@@ -84,7 +83,7 @@ func main() {
 
 	err = ch.PublishWithContext(ctx,
 		"processed-events-exchange", // exchange
-		"pe.webhook",                // routing key
+		"",                          // routing key
 		false,                       // mandatory
 		false,                       // immediate
 		amqp.Publishing{

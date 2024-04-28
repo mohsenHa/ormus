@@ -2,10 +2,17 @@ package main
 
 import (
 	"fmt"
-	"github.com/ormushq/ormus/destination/mohsen/eventmanager/adapter/rabbitmqeeventmanager"
-	"github.com/ormushq/ormus/destination/mohsen/taskmanager/adapter/channeleventmannager"
-	"github.com/ormushq/ormus/destination/mohsen/worker/handler/webhookworker"
-	"github.com/ormushq/ormus/destination/mohsen/workermanager"
+	"github.com/ormushq/ormus/adapter/redis"
+	"github.com/ormushq/ormus/destination/newimplementation/eventmanager/adapter/rabbitmqeeventmanager"
+	tasktype "github.com/ormushq/ormus/destination/newimplementation/task"
+	"github.com/ormushq/ormus/destination/newimplementation/taskmanager"
+	"github.com/ormushq/ormus/destination/newimplementation/taskmanager/adapter/rabbitmqtaskmanager"
+	"github.com/ormushq/ormus/destination/newimplementation/worker"
+	"github.com/ormushq/ormus/destination/newimplementation/worker/handler/fakerworker"
+	"github.com/ormushq/ormus/destination/newimplementation/workermanager"
+	"github.com/ormushq/ormus/destination/taskservice"
+	"github.com/ormushq/ormus/destination/taskservice/adapter/idempotency/redistaskidempotency"
+	"github.com/ormushq/ormus/destination/taskservice/adapter/repository/inmemorytaskrepo"
 	"log"
 	"log/slog"
 	"os"
@@ -13,12 +20,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ormushq/ormus/adapter/redis"
 	"github.com/ormushq/ormus/config"
-	"github.com/ormushq/ormus/destination/taskservice/adapter/idempotency/redistaskidempotency"
 	"github.com/ormushq/ormus/logger"
 )
 
+/*
+Flow of code
+- Processed event publish from core service
+- Processed event consume in event manager
+- Event manager publish received event to local channel that task manager listens on it
+- Task manager receives event from event manager
+- Task manager convert event to task
+- Task manager check task with task idempotency if it is not already handle continue
+- Task manager publish event to provided publisherChannel from task manager adapter
+- Worker listen on provided consumerChannel from task manager
+- Worker receive task
+- Worker check task with idempotency
+- Worker handle task
+- Worker store result in task repository
+- Worker store task in task idempotency
+- Worker publish deliver task response to provided channel from event manager
+
+Overview of event flow
+Event Manager => Task Manager => Worker
+*/
 func main() {
 	done := make(chan bool)
 	wg := sync.WaitGroup{}
@@ -46,92 +71,98 @@ func main() {
 	l := logger.New(cfg, &opt)
 	slog.SetDefault(l)
 
+	//Create new instant of redis addapter
 	redisAdapter, err := redis.New(config.C().Redis)
 	if err != nil {
 		log.Panicf("error in new redis")
 	}
-	taskIdempotency := redistaskidempotency.New(redisAdapter, "tasks:", 30*24*time.Hour)
 
-	// Create event manager
-	eventManager, eventManagerErr := rabbitmqeeventmanager.New()
+	//Create task idempotency with redis adapter
+	//This use for check if specific task already handled or not
+	taskIdempotency := redistaskidempotency.New(redisAdapter, "tasks:", 30*24*time.Hour)
+	//Creat task repo
+	//This use for store result of task handle to DB
+	taskRepo := inmemorytaskrepo.New()
+
+	//Both task repo and task idempotency pass to task service and other services
+	//use this for access to theme
+	taskService := taskservice.New(taskIdempotency, taskRepo)
+
+	// We define all worker here
+	// for each task type we can register a worker instant
+	workers := map[tasktype.TaskType]worker.Instant{
+		tasktype.Fake:    fakerworker.New(done, &wg, taskService, 5),
+		tasktype.Webhook: fakerworker.New(done, &wg, taskService, 5),
+	}
+
+	// Event manager used for receive processed events from th core service
+	// and pass them to task service
+	// this adapter run multiple listeners on rabbitmq queue and it configurable
+	// from RabbitMQEventManagerConnection
+	eventManager, eventManagerErr := rabbitmqeeventmanager.New(done, &wg,
+		config.C().Destination.EventManager.RabbitMQEventManagerConnection)
 	if eventManagerErr != nil {
 		log.Panicf("error in new event manager: %v", eventManagerErr)
 	}
-	eventChannelConsumer, eventChannelConsumerErr := eventManager.GetEventChanelConsumer(done, &wg)
-	if eventChannelConsumerErr != nil {
-		log.Panicf("error in new eventChannelConsumer: %v", eventChannelConsumerErr)
-	}
-	eventChannelPublisher, eventChannelPublisherErr := eventManager.GetEventChanelPublisher(done, &wg)
-	if eventChannelPublisherErr != nil {
-		log.Panicf("error in new eventChannelPublisher: %v", eventChannelPublisherErr)
+
+	// Task manager adapter used for provide two channel
+	// one for consume and another one for publish
+	// The reason why it use two channels is that if we want to separate the workers
+	// to another process and use a message broker in between theme we need to create
+	// two channel one provide for publish task one provide for consume task
+	// it flow like this
+	//
+	// task manager listen for events on event publisher channel
+	// convert it to task
+	// publish task to publish task channel
+	// ------
+	// worker process consume on consume task channel
+	//
+	// in one scenario both publisher channel and consumer is the same
+	// in one scenario we can separate them two different channels
+	// publisher channel receive task and pss it to broker
+	// consumer process listen on rabbitmq and after receive task publish it on publish chanel
+	//
+	// This adapter init with 3 modes publisher, consumer, both
+	// if we separate worker process we use consumer mode on worker process
+	// and publisher mode on other processes
+	// if we use only one binary we can use both mode
+	taskManagerAdapter, errCTM := rabbitmqtaskmanager.New(done, &wg,
+		config.C().Destination.TaskManager.RabbitMQConnection, rabbitmqtaskmanager.BothMode, 5)
+
+	// This adapter is simple and both consumer and publisher channels are same
+	//taskManagerAdapter, errCTM := channeltaskmanager.New(done, &wg)
+
+	if errCTM != nil {
+		log.Panicf("error in new taskManagerErr: %v", errCTM)
 	}
 
-	// Create task manager
-	taskManager, taskManagerErr := channeleventmannager.New(taskIdempotency, eventChannelConsumer)
+	// Task manager use one task adapter to handle tasks
+	taskManager, taskManagerErr := taskmanager.New(done, &wg, taskManagerAdapter, taskService, eventManager)
 	if taskManagerErr != nil {
 		log.Panicf("error in new taskManagerErr: %v", taskManagerErr)
 	}
-	taskChannelConsumer, askChannelConsumerErr := taskManager.GetTaskChannelConsumer(done, &wg)
-	if askChannelConsumerErr != nil {
-		log.Panicf("error in new askChannelConsumerErr: %v", askChannelConsumerErr)
-	}
 
-	// Create worker manager
-	workerManager, workerManagerErr := workermanager.New(taskChannelConsumer, eventChannelPublisher)
+	// Worker manager managed the workers
+	// it watches workers if they crash try to recreate them for specific times
+	workerManager, workerManagerErr := workermanager.New(done, &wg, eventManager, taskManager)
 	if workerManagerErr != nil {
 		log.Panicf("error in new workerManager: %v", workerManagerErr)
 	}
-	// Create workers
-	webhookWorker, webhookWorkerErr := webhookworker.New()
-	if webhookWorkerErr != nil {
-		log.Panicf("error in new webhookWorkerErr: %v", webhookWorkerErr)
+
+	// Here we register workers to the worker manager and create for them channels
+	// every task types has it own channel
+	for t, w := range workers {
+		taskManager.NewChannel(t, 100)
+		registerWorkerErr := workerManager.RegisterWorker(t, w)
+		if registerWorkerErr != nil {
+			log.Panicf("error in new webhookWorkerErr: %v", registerWorkerErr)
+		}
 	}
 
-	// Register workers
-	registerWorkerErr := workerManager.RegisterWorker("webhook", webhookWorker)
-	if registerWorkerErr != nil {
-		log.Panicf("error in new webhookWorkerErr: %v", registerWorkerErr)
-	}
-
-	// Setup Task Service
-
-	// In-Memory task idempotency
-	// taskIdempotency := inmemorytaskidempotency.New()
-
-	// Redis task idempotency
-
-	// todo do we need to use separate db number for redis task idempotency or destination module?
-
-	//----- Consuming processed events -----//
-
-	// Get connection config for rabbitMQ consumer
-	//rmqConsumerConnConfig := config.C().Destination.RabbitMQConsumerConnection
-	//rmqConsumerTopic := config.C().Destination.ConsumerTopic
-
-	// todo should we consider array of topics?
-	//rmqConsumer := rabbitmqconsumer.New(rmqConsumerConnConfig, rmqConsumerTopic)
-
-	log.Println("Start Consuming processed events.")
-	//processedEvents, err := rmqConsumer.Consume(done, &wg)
-	//if err != nil {
-	//	log.Panicf("Error on consuming processed events.")
-	//}
-
-	//----- Setup Task Coordinator -----//
-	// Task coordinator specifies which task manager should handle incoming processed events.
-	// we can have different task coordinators base on destination type, customer plans, etc.
-	// Now we just create dtcoordinator that stands for destination type coordinator.
-	// It determines which task manager should be used for processed evens considering destination type of processed events.
-
-	// todo maybe it is better to having configs for setup of task coordinator.
-
-	//rmqTaskManagerConnConfig := config.C().Destination.RabbitMQTaskManagerConnection
-	//coordinator := dtcoordinator.New(taskService, rmqTaskManagerConnConfig)
-
-	//cErr := coordinator.Start(processedEvents, done, &wg)
-	//if cErr != nil {
-	//	log.Panicf("Error on starting destination type coordinator.")
-	//}
+	//We just start task manager and worker manager
+	taskManager.Start()
+	workerManager.Start()
 
 	//----- Handling graceful shutdown  -----//
 
@@ -140,11 +171,11 @@ func main() {
 	<-quit
 
 	fmt.Println("Received interrupt signal, shutting down gracefully...")
-	done <- true
+	//done <- true
 
 	close(done)
 
 	// todo use config for waiting time after graceful shutdown
-	time.Sleep(waitingAfterShutdownInSeconds * time.Second)
+	time.Sleep(5 * time.Second)
 	wg.Wait()
 }

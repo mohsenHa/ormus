@@ -3,7 +3,7 @@ tmp_dir = "temp"
 
 [build]
   bin = "./cmd/destination/temp/main"
-  cmd = "go build -o ./cmd/destination/temp/main ./cmd/destination"
+  cmd = "go build -o ./cmd/destination/temp/main ./cmd/destination/main2.go"
   delay = 1000
   exclude_dir = []
   exclude_file = []

@@ -12,6 +12,30 @@ redis:
 destination:
   debug_mode: true
   consumer_topic: "pe.#"    # pe stands for processed event. and # substitute for zero or more words.
+  task_manager:
+    rabbitmq_task_manager_connection:
+      user: guest
+      password: guest
+      host: rabbitmq
+      port: 5672
+      vhost: /
+      queue_prefix: destination_queue_prefix_
+      exchange_prefix: destination_exchange_prefix_
+  event_manager:
+    rabbitmq_event_manager_connection:
+      user: guest
+      password: guest
+      host: rabbitmq
+      port: 5672
+      vhost: /
+      deliver_event_topic: deliver-events-exchange
+      processed_event_topic: processed-events-exchange
+      deliver_event_timeout_in_seconds: 10
+      deliver_event_queue: deliver-events-queue
+      processed_event_queue: processed-events-queue
+      deliver_event_channel_size: 100
+      processed_event_channel_size: 100
+      number_instants: 5
   rabbitmq_consumer_connection:
     user: guest
     password: guest
