@@ -35,11 +35,11 @@ func (wm *WorkerManager) RegisterWorker(taskType tasktype.TaskType, worker worke
 
 func (wm *WorkerManager) Start() {
 	for t, w := range wm.workers {
-		wm.StartWorkers(w, t)
+		wm.startWorkers(w, t)
 	}
 }
 
-func (wm *WorkerManager) StartWorkers(workerInstant worker.Instant, taskType tasktype.TaskType) {
+func (wm *WorkerManager) startWorkers(workerInstant worker.Instant, taskType tasktype.TaskType) {
 	channel, err := wm.taskManager.GetTaskChannelForConsume(taskType)
 	if err != nil {
 		slog.Error(fmt.Sprintf("For task type %v channel not found", taskType))
