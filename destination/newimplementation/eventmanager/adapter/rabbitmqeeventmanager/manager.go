@@ -137,23 +137,29 @@ func (r RabbitMQTaskManager) startConsumeProcessedEvent() {
 	for {
 		select {
 		case msg := <-msgs:
-			if len(msg.Body) == 0 {
-				continue
-			}
-			e, uErr := taskentity.UnmarshalBytesToProcessedEvent(msg.Body)
-			if uErr != nil {
-				slog.Error(fmt.Sprintf("Failed to convert bytes to processed events: %v", uErr))
-				continue
-			}
+			r.wg.Add(1)
+			go func(msg amqp.Delivery) {
+				defer r.wg.Done()
+				if len(msg.Body) == 0 {
+					return
+				}
+				e, uErr := taskentity.UnmarshalBytesToProcessedEvent(msg.Body)
+				if uErr != nil {
+					slog.Error(fmt.Sprintf("Failed to convert bytes to processed events: %v", uErr))
+					return
+				}
 
-			fmt.Println("Processed event receive in event manager and publish to event publisher channel ")
-			r.eventPublisherChannel <- e
+				fmt.Println("Processed event receive in event manager and publish to event publisher channel ")
+				r.eventPublisherChannel <- e
 
-			// Acknowledge the message
-			err = msg.Ack(false)
-			if err != nil {
-				slog.Error(fmt.Sprintf("Failed to acknowledge message: %v", err))
-			}
+				// Acknowledge the message
+				err = msg.Ack(false)
+				if err != nil {
+					slog.Error(fmt.Sprintf("Failed to acknowledge message: %v", err))
+				}
+
+			}(msg)
+
 		case <-r.done:
 			return
 		}
@@ -204,23 +210,27 @@ func (r RabbitMQTaskManager) PrepareDeliverEventRabbitMq() {
 		for {
 			select {
 			case i := <-r.deliveryTaskChannel:
+				r.wg.Add(1)
+				go func(deliverTask param.DeliveryTaskResponse) {
+					defer r.wg.Done()
 
-				jpe, err := json.Marshal(i)
-				if err != nil {
-					log.Panicf("Error: %e", err)
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), r.config.DeliverEventTimeoutInSeconds*time.Second)
-				err = ch.PublishWithContext(ctx,
-					r.config.DeliverEventTopic, // exchange
-					"",                         // routing key
-					false,                      // mandatory
-					false,                      // immediate
-					amqp.Publishing{
-						ContentType: "text/plain",
-						Body:        jpe,
-					})
-				failOnError(err, "Failed to publish a message")
-				cancel()
+					jpe, err := json.Marshal(i)
+					if err != nil {
+						log.Panicf("Error: %e", err)
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), r.config.DeliverEventTimeoutInSeconds*time.Second)
+					err = ch.PublishWithContext(ctx,
+						r.config.DeliverEventTopic, // exchange
+						"",                         // routing key
+						false,                      // mandatory
+						false,                      // immediate
+						amqp.Publishing{
+							ContentType: "text/plain",
+							Body:        jpe,
+						})
+					failOnError(err, "Failed to publish a message")
+					cancel()
+				}(i)
 			case <-r.done:
 
 				return
