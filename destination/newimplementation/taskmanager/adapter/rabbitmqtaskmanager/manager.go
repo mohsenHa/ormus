@@ -137,23 +137,28 @@ func (m *Manager) startConsumerChannel(taskType tasktype.TaskType) {
 	for {
 		select {
 		case msg := <-msgs:
-			if len(msg.Body) == 0 {
-				continue
-			}
-			e, uErr := taskentity.UnmarshalBytesToTask(msg.Body)
-			if uErr != nil {
-				slog.Error(fmt.Sprintf("Failed to convert bytes to processed events: %v", uErr))
-				continue
-			}
-			fmt.Println("Task receive in task manager consumer and publish to taskChannelsForConsume")
+			m.wg.Add(1)
+			go func(msg amqp.Delivery) {
+				defer m.wg.Done()
 
-			taskChannel <- e
+				if len(msg.Body) == 0 {
+					return
+				}
+				e, uErr := taskentity.UnmarshalBytesToTask(msg.Body)
+				if uErr != nil {
+					slog.Error(fmt.Sprintf("Failed to convert bytes to processed events: %v", uErr))
+					return
+				}
+				fmt.Println("Task receive in task manager consumer and publish to taskChannelsForConsume")
 
-			// Acknowledge the message
-			err = msg.Ack(false)
-			if err != nil {
-				slog.Error(fmt.Sprintf("Failed to acknowledge message: %v", err))
-			}
+				taskChannel <- e
+
+				// Acknowledge the message
+				err = msg.Ack(false)
+				if err != nil {
+					slog.Error(fmt.Sprintf("Failed to acknowledge message: %v", err))
+				}
+			}(msg)
 		case <-m.done:
 
 			return
@@ -197,26 +202,30 @@ func (m *Manager) startPublisherChannel(taskType tasktype.TaskType) {
 	for {
 		select {
 		case task := <-channel:
-			jpe, errM := json.Marshal(task)
-			if errM != nil {
-				slog.Error("Error: %e", err)
-				continue
-			}
-			fmt.Println("Task receive in task manager publisher and publish to TaskChannelForPublish")
+			m.wg.Add(1)
+			go func(task taskentity.Task) {
+				defer m.wg.Done()
+				jpe, errM := json.Marshal(task)
+				if errM != nil {
+					slog.Error("Error: %e", err)
+					return
+				}
+				fmt.Println("Task receive in task manager publisher and publish to TaskChannelForPublish")
 
-			errPWC := ch.PublishWithContext(context.Background(),
-				m.config.ExchangePrefix+string(taskType), // exchange
-				"",    // routing key
-				false, // mandatory
-				false, // immediate
-				amqp.Publishing{
-					ContentType: "text/plain",
-					Body:        jpe,
-				})
-			if errPWC != nil {
-				slog.Error(err.Error())
-				continue
-			}
+				errPWC := ch.PublishWithContext(context.Background(),
+					m.config.ExchangePrefix+string(taskType), // exchange
+					"",    // routing key
+					false, // mandatory
+					false, // immediate
+					amqp.Publishing{
+						ContentType: "text/plain",
+						Body:        jpe,
+					})
+				if errPWC != nil {
+					slog.Error(err.Error())
+					return
+				}
+			}(task)
 		case <-m.done:
 			return
 		}
