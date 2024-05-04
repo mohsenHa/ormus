@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"github.com/ormushq/ormus/adapter/redis"
-	"github.com/ormushq/ormus/destination/newimplementation/eventmanager/adapter/rabbitmqeeventmanager"
+	"github.com/ormushq/ormus/destination/newimplementation/channel"
+	rbbitmqadapter "github.com/ormushq/ormus/destination/newimplementation/channel/adapter/rabbitmq"
+	"github.com/ormushq/ormus/destination/newimplementation/eventmanager"
 	tasktype "github.com/ormushq/ormus/destination/newimplementation/task"
 	"github.com/ormushq/ormus/destination/newimplementation/taskmanager"
-	"github.com/ormushq/ormus/destination/newimplementation/taskmanager/adapter/rabbitmqtaskmanager"
 	"github.com/ormushq/ormus/destination/newimplementation/worker"
 	"github.com/ormushq/ormus/destination/newimplementation/worker/handler/fakerworker"
 	"github.com/ormushq/ormus/destination/newimplementation/workermanager"
@@ -66,7 +67,8 @@ func main() {
 
 	opt := slog.HandlerOptions{
 		// todo should level debug be read from config?
-		Level: logLevel,
+		Level:     logLevel,
+		AddSource: true,
 	}
 	l := logger.New(cfg, &opt)
 	slog.SetDefault(l)
@@ -94,13 +96,32 @@ func main() {
 		tasktype.Fake:    fakerworker.New(done, &wg, taskService, 5),
 		tasktype.Webhook: fakerworker.New(done, &wg, taskService, 5),
 	}
+	destinationConfig := config.C().Destination
+
+	//channelManager := channelmanager.New(done, &wg)
+	rabbitChannelAdapter := rbbitmqadapter.New(done, &wg, destinationConfig.RabbitmqConnection)
+	//simpleChannelAdapter := simple.New(done, &wg)
+
+	rabbitChannelAdapter.NewChannel(
+		destinationConfig.EventManager.RabbitMQEventManagerConnection.ProcessedEventChannelName,
+		channel.OutputOnly,
+		100, 5)
+
+	rabbitChannelAdapter.NewChannel(
+		destinationConfig.EventManager.RabbitMQEventManagerConnection.DeliverTaskChannelName,
+		channel.InputOnlyMode,
+		100, 5)
+
+	//channelManager.RegisterChannelAdapter("rabbitmq", rabbitmqChannelAdapter)
 
 	// Event manager used for receive processed events from th core service
 	// and pass them to task service
 	// this adapter run multiple listeners on rabbitmq queue and it configurable
 	// from RabbitMQEventManagerConnection
-	eventManager, eventManagerErr := rabbitmqeeventmanager.New(done, &wg,
-		config.C().Destination.EventManager.RabbitMQEventManagerConnection)
+	eventManager, eventManagerErr := eventmanager.New(done, &wg,
+		destinationConfig.EventManager.RabbitMQEventManagerConnection,
+		rabbitChannelAdapter, 5)
+
 	if eventManagerErr != nil {
 		log.Panicf("error in new event manager: %v", eventManagerErr)
 	}
@@ -127,18 +148,20 @@ func main() {
 	// if we separate worker process we use consumer mode on worker process
 	// and publisher mode on other processes
 	// if we use only one binary we can use both mode
-	taskManagerAdapter, errCTM := rabbitmqtaskmanager.New(done, &wg,
-		config.C().Destination.TaskManager.RabbitMQConnection, rabbitmqtaskmanager.BothMode, 5)
+	//taskManagerAdapter, errCTM := rabbitmqtaskmanager.New(done, &wg,
+	//	destinationConfig.TaskManager.RabbitMQConnection,
+	//	taskmanager.BothMode, 5)
 
 	// This adapter is simple and both consumer and publisher channels are same
 	//taskManagerAdapter, errCTM := channeltaskmanager.New(done, &wg)
 
-	if errCTM != nil {
-		log.Panicf("error in new taskManagerErr: %v", errCTM)
-	}
+	//if errCTM != nil {
+	//	log.Panicf("error in new taskManagerErr: %v", errCTM)
+	//}
 
 	// Task manager use one task adapter to handle tasks
-	taskManager, taskManagerErr := taskmanager.New(done, &wg, taskManagerAdapter, taskService, eventManager)
+	taskManager, taskManagerErr := taskmanager.New(done, &wg, destinationConfig.TaskManager, rabbitChannelAdapter, channel.BothMode,
+		taskService, eventManager)
 	if taskManagerErr != nil {
 		log.Panicf("error in new taskManagerErr: %v", taskManagerErr)
 	}
@@ -153,7 +176,7 @@ func main() {
 	// Here we register workers to the worker manager and create for them channels
 	// every task types has it own channel
 	for t, w := range workers {
-		taskManager.NewChannel(t, 100)
+		taskManager.NewChannel(t, 100, 5)
 		registerWorkerErr := workerManager.RegisterWorker(t, w)
 		if registerWorkerErr != nil {
 			log.Panicf("error in new webhookWorkerErr: %v", registerWorkerErr)

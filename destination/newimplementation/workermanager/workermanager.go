@@ -40,7 +40,7 @@ func (wm *WorkerManager) Start() {
 }
 
 func (wm *WorkerManager) startWorkers(workerInstant worker.Instant, taskType tasktype.TaskType) {
-	channel, err := wm.taskManager.GetTaskChannelForConsume(taskType)
+	channel, err := wm.taskManager.GetTaskOutputChannel(taskType)
 	if err != nil {
 		slog.Error(fmt.Sprintf("For task type %v channel not found", taskType))
 	}

@@ -65,6 +65,7 @@ func (t Task) DestinationSlug() string {
 
 func UnmarshalBytesToTask(body []byte) (Task, error) {
 	var t Task
+	fmt.Println(string(body))
 	if err := json.Unmarshal(body, &t); err != nil {
 		fmt.Println("Error on unMarshaling processed event :", err)
 
