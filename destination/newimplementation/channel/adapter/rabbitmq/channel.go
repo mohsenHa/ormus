@@ -113,7 +113,8 @@ func (rc rabbitmqChannel) startInput() {
 				case <-rc.done:
 					return
 				case msg := <-rc.inputChannel:
-					slog.Debug(string(msg))
+					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:116",
+						string(msg))
 					go func(msg []byte) {
 						defer rc.wg.Done()
 
@@ -165,9 +166,11 @@ func (rc rabbitmqChannel) startOutput() {
 				case <-rc.done:
 					return
 				case msg := <-msgs:
-					slog.Debug(string(msg.Body))
+					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:169",
+						string(msg.Body))
 					rc.outputChannel <- msg.Body
 				}
+
 			}
 		}()
 	}

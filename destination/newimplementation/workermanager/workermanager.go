@@ -2,7 +2,7 @@ package workermanager
 
 import (
 	"fmt"
-	"github.com/ormushq/ormus/destination/newimplementation/eventmanager"
+	"github.com/ormushq/ormus/destination/newimplementation/channel"
 	tasktype "github.com/ormushq/ormus/destination/newimplementation/task"
 	"github.com/ormushq/ormus/destination/newimplementation/taskmanager"
 	"github.com/ormushq/ormus/destination/newimplementation/worker"
@@ -11,21 +11,32 @@ import (
 )
 
 type WorkerManager struct {
-	workers      map[tasktype.TaskType]worker.Instant
-	taskManager  *taskmanager.TaskManager
-	eventManager eventmanager.EventManager
-	wg           *sync.WaitGroup
-	done         <-chan bool
+	workers map[tasktype.TaskType]worker.Instant
+	//taskManager  *taskmanager.TaskManager
+	//eventManager eventmanager.EventManager
+	channelConverter       *channel.Converter
+	channelAdapter         channel.Adapter
+	taskChannelPrefix      string
+	deliverTaskChannelName string
+	wg                     *sync.WaitGroup
+	done                   <-chan bool
 }
 
 func New(done <-chan bool, wg *sync.WaitGroup,
-	eventManager eventmanager.EventManager, taskManager *taskmanager.TaskManager) (*WorkerManager, error) {
+	channelAdapter channel.Adapter,
+	channelConverter *channel.Converter,
+	taskChannelPrefix string,
+	deliverTaskChannelName string,
+
+) (*WorkerManager, error) {
 	return &WorkerManager{
-		workers:      make(map[tasktype.TaskType]worker.Instant),
-		taskManager:  taskManager,
-		eventManager: eventManager,
-		done:         done,
-		wg:           wg,
+		workers:                make(map[tasktype.TaskType]worker.Instant),
+		channelAdapter:         channelAdapter,
+		channelConverter:       channelConverter,
+		taskChannelPrefix:      taskChannelPrefix,
+		deliverTaskChannelName: deliverTaskChannelName,
+		done:                   done,
+		wg:                     wg,
 	}, nil
 }
 func (wm *WorkerManager) RegisterWorker(taskType tasktype.TaskType, worker worker.Instant) error {
@@ -40,10 +51,17 @@ func (wm *WorkerManager) Start() {
 }
 
 func (wm *WorkerManager) startWorkers(workerInstant worker.Instant, taskType tasktype.TaskType) {
-	channel, err := wm.taskManager.GetTaskOutputChannel(taskType)
+	outputChannel, err := wm.channelAdapter.GetOutputChannel(
+		taskmanager.GetTaskChannelName(wm.taskChannelPrefix, taskType))
 	if err != nil {
-		slog.Error(fmt.Sprintf("For task type %v channel not found", taskType))
+		slog.Error(fmt.Sprintf("For task type %v outputChannel not found", taskType))
 	}
+	taskChannel := wm.channelConverter.ConvertToOutputTaskChannel(outputChannel)
+	inputChannel, errDc := wm.channelAdapter.GetInputChannel(wm.deliverTaskChannelName)
+	if errDc != nil {
+		slog.Error(fmt.Sprintf("For task type %v outputChannel not found", taskType))
+	}
+	deliveryTaskChannel := wm.channelConverter.ConvertToInputDeliveryTaskChannel(inputChannel)
 
 	for i := 0; i < workerInstant.NumberOfInstants; i++ {
 		wm.wg.Add(1)
@@ -51,7 +69,7 @@ func (wm *WorkerManager) startWorkers(workerInstant worker.Instant, taskType tas
 			defer wm.wg.Done()
 
 			crashChan := make(chan uint)
-			cw.Work(channel, wm.eventManager.GetDeliveryTaskChannel(), crashChan)
+			cw.Work(taskChannel, deliveryTaskChannel, crashChan)
 			for {
 				select {
 				case crashCount := <-crashChan:
@@ -59,7 +77,7 @@ func (wm *WorkerManager) startWorkers(workerInstant worker.Instant, taskType tas
 						slog.Error(fmt.Sprintf("Worker for type %s is crashed mor than 5 time", ct))
 					}
 					cw.UpdateCrashCount(crashCount + 1)
-					cw.Work(channel, wm.eventManager.GetDeliveryTaskChannel(), crashChan)
+					cw.Work(taskChannel, deliveryTaskChannel, crashChan)
 				case <-wm.done:
 					return
 				}

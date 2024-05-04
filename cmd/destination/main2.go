@@ -5,7 +5,6 @@ import (
 	"github.com/ormushq/ormus/adapter/redis"
 	"github.com/ormushq/ormus/destination/newimplementation/channel"
 	rbbitmqadapter "github.com/ormushq/ormus/destination/newimplementation/channel/adapter/rabbitmq"
-	"github.com/ormushq/ormus/destination/newimplementation/eventmanager"
 	tasktype "github.com/ormushq/ormus/destination/newimplementation/task"
 	"github.com/ormushq/ormus/destination/newimplementation/taskmanager"
 	"github.com/ormushq/ormus/destination/newimplementation/worker"
@@ -67,8 +66,7 @@ func main() {
 
 	opt := slog.HandlerOptions{
 		// todo should level debug be read from config?
-		Level:     logLevel,
-		AddSource: true,
+		Level: logLevel,
 	}
 	l := logger.New(cfg, &opt)
 	slog.SetDefault(l)
@@ -98,16 +96,17 @@ func main() {
 	}
 	destinationConfig := config.C().Destination
 
+	channelConverter := channel.NewConverter(done, &wg)
 	//channelManager := channelmanager.New(done, &wg)
-	rabbitChannelAdapter := rbbitmqadapter.New(done, &wg, destinationConfig.RabbitmqConnection)
+	channelAdapter := rbbitmqadapter.New(done, &wg, destinationConfig.RabbitmqConnection)
 	//simpleChannelAdapter := simple.New(done, &wg)
 
-	rabbitChannelAdapter.NewChannel(
+	channelAdapter.NewChannel(
 		destinationConfig.EventManager.RabbitMQEventManagerConnection.ProcessedEventChannelName,
 		channel.OutputOnly,
 		100, 5)
 
-	rabbitChannelAdapter.NewChannel(
+	channelAdapter.NewChannel(
 		destinationConfig.EventManager.RabbitMQEventManagerConnection.DeliverTaskChannelName,
 		channel.InputOnlyMode,
 		100, 5)
@@ -118,13 +117,13 @@ func main() {
 	// and pass them to task service
 	// this adapter run multiple listeners on rabbitmq queue and it configurable
 	// from RabbitMQEventManagerConnection
-	eventManager, eventManagerErr := eventmanager.New(done, &wg,
-		destinationConfig.EventManager.RabbitMQEventManagerConnection,
-		rabbitChannelAdapter, 5)
+	//eventManager, eventManagerErr := eventmanager.New(done, &wg,
+	//	destinationConfig.EventManager.RabbitMQEventManagerConnection,
+	//	channelAdapter, 5)
 
-	if eventManagerErr != nil {
-		log.Panicf("error in new event manager: %v", eventManagerErr)
-	}
+	//if eventManagerErr != nil {
+	//	log.Panicf("error in new event manager: %v", eventManagerErr)
+	//}
 
 	// Task manager adapter used for provide two channel
 	// one for consume and another one for publish
@@ -160,15 +159,25 @@ func main() {
 	//}
 
 	// Task manager use one task adapter to handle tasks
-	taskManager, taskManagerErr := taskmanager.New(done, &wg, destinationConfig.TaskManager, rabbitChannelAdapter, channel.BothMode,
-		taskService, eventManager)
+	taskManager, taskManagerErr := taskmanager.New(done, &wg,
+		taskmanager.TaskManagerParam{
+			Config:                    destinationConfig.TaskManager,
+			ChannelConverter:          channelConverter,
+			ChannelAdapter:            channelAdapter,
+			ChannelMode:               channel.BothMode,
+			ProcessedEventChannelName: destinationConfig.EventManager.RabbitMQEventManagerConnection.ProcessedEventChannelName,
+			TaskService:               taskService,
+		},
+	)
 	if taskManagerErr != nil {
 		log.Panicf("error in new taskManagerErr: %v", taskManagerErr)
 	}
 
 	// Worker manager managed the workers
 	// it watches workers if they crash try to recreate them for specific times
-	workerManager, workerManagerErr := workermanager.New(done, &wg, eventManager, taskManager)
+	workerManager, workerManagerErr := workermanager.New(done, &wg, channelAdapter, channelConverter,
+		destinationConfig.TaskManager.ChannelPrefix,
+		destinationConfig.EventManager.RabbitMQEventManagerConnection.DeliverTaskChannelName)
 	if workerManagerErr != nil {
 		log.Panicf("error in new workerManager: %v", workerManagerErr)
 	}

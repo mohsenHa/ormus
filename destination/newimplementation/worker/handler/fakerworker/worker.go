@@ -50,6 +50,7 @@ func (w *Worker) Work(channel <-chan taskentity.Task, deliverChannel chan<- para
 			select {
 			case task := <-channel:
 				w.wg.Add(1)
+				fmt.Println(task)
 				go w.taskReceive(task, deliverChannel)
 			case <-w.done:
 				return
@@ -67,8 +68,9 @@ func (w *Worker) taskReceive(task taskentity.Task, deliverChannel chan<- param.D
 	}
 
 	if !taskStatus.CanBeExecuted() {
-		slog.Debug(fmt.Sprintf("Task [%s] has %s status and is not executable", task.ID,
-			taskStatus.String()))
+		fmt.Println("destination/newimplementation/worker/handler/fakerworker/worker.go:71",
+			fmt.Sprintf("Task [%s] has %s status and is not executable", task.ID,
+				taskStatus.String()))
 		return
 	}
 

@@ -7,11 +7,7 @@ type EventManager struct {
 }
 
 type RabbitMQEventManagerConnection struct {
-	User                        string        `koanf:"user"`
-	Password                    string        `koanf:"password"`
-	Host                        string        `koanf:"host"`
-	Port                        int           `koanf:"port"`
-	Vhost                       string        `koanf:"vhost"`
+	RabbitmqConnection
 	DeliverTaskChannelName      string        `koanf:"deliver_task_channel_name"`
 	ProcessedEventChannelName   string        `koanf:"processed_event_channel_name"`
 	DeliverTaskTopic            string        `koanf:"deliver_task_topic"`
