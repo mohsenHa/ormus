@@ -53,71 +53,8 @@ func New(done <-chan bool, wg *sync.WaitGroup,
 		done:                      done,
 		processedEventChannelName: param.ProcessedEventChannelName,
 		taskService:               param.TaskService,
-		//eventManager:      eventManager,
-		//taskOutputChannel: make(map[tasktype.TaskType]chan taskentity.Task),
-		//taskInputChannel:  make(map[tasktype.TaskType]chan taskentity.Task),
 	}, nil
 }
-func (tm *TaskManager) NewChannel(taskType tasktype.TaskType, bufferSize int, numberInstants int) {
-	tm.channelAdapter.NewChannel(tm.getTaskChannelName(taskType), tm.channelMod, bufferSize, numberInstants)
-
-	//tm.taskOutputChannel[taskType] = make(chan taskentity.Task, bufferSize)
-	//tm.taskInputChannel[taskType] = make(chan taskentity.Task, bufferSize)
-}
-
-//
-//func (tm *TaskManager) prepareOutputChannel(taskType tasktype.TaskType) {
-//	outputChannel, _ := tm.channelAdapter.GetOutputChannel(tm.getTaskChannelName(taskType))
-//	tm.wg.Add(1)
-//	go func() {
-//		defer tm.wg.Done()
-//		for {
-//			select {
-//			case <-tm.done:
-//				return
-//			case msq := <-outputChannel:
-//				tm.wg.Add(1)
-//				go func(msg []byte) {
-//					e, uErr := taskentity.UnmarshalBytesToTask(msg)
-//					if uErr != nil {
-//						slog.Error(fmt.Sprintf("Failed to convert bytes to processed events: %v", uErr))
-//						return
-//					}
-//					fmt.Println("destination/newimplementation/taskmanager/taskmanager.go:82",
-//						string(msg))
-//					tm.taskOutputChannel[taskType] <- e
-//				}(msq)
-//
-//			}
-//		}
-//	}()
-//}
-//func (tm *TaskManager) prepareInputChannel(taskType tasktype.TaskType) {
-//	inputChannel, _ := tm.channelAdapter.GetInputChannel(tm.getTaskChannelName(taskType))
-//	tm.wg.Add(1)
-//	go func() {
-//		defer tm.wg.Done()
-//		for {
-//			select {
-//			case <-tm.done:
-//				return
-//			case task := <-tm.taskInputChannel[taskType]:
-//				tm.wg.Add(1)
-//				go func(task taskentity.Task) {
-//					jpe, errM := json.Marshal(task)
-//					if errM != nil {
-//						slog.Error("Error: %e", errM)
-//						return
-//					}
-//					fmt.Println("destination/newimplementation/taskmanager/taskmanager.go:108",
-//						string(jpe))
-//					inputChannel <- jpe
-//				}(task)
-//
-//			}
-//		}
-//	}()
-//}
 
 func (tm *TaskManager) GetTaskOutputChannel(taskType tasktype.TaskType) (<-chan taskentity.Task, error) {
 	outputChannel, err := tm.channelAdapter.GetOutputChannel(tm.getTaskChannelName(taskType))
@@ -178,13 +115,13 @@ func (tm *TaskManager) handleEvent(e event2.ProcessedEvent) {
 		return
 	}
 	if !taskStatus.CanBeExecuted() {
-		fmt.Println("destination/newimplementation/taskmanager/taskmanager.go:171",
+		fmt.Println("destination/newimplementation/taskmanager/taskmanager.go:118",
 			fmt.Sprintf("Task [%s] has %s status and is not executable", taskID, taskStatus.String()))
 		return
 	}
 
 	task := taskentity.MakeTaskUsingProcessedEvent(e)
-	fmt.Println("destination/newimplementation/taskmanager/taskmanager.go:177", fmt.Sprintf("%+v", task))
+	fmt.Println("destination/newimplementation/taskmanager/taskmanager.go:124", fmt.Sprintf("%+v", task))
 	targetChannel <- task
 }
 

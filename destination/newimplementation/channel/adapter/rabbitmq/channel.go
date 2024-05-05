@@ -36,9 +36,21 @@ func newChannel(done <-chan bool, wg *sync.WaitGroup, rabbitmqChannelParams rabb
 		rabbitmqChannelParams.config.User, rabbitmqChannelParams.config.Password, rabbitmqChannelParams.config.Host,
 		rabbitmqChannelParams.config.Port, rabbitmqChannelParams.config.Vhost))
 	failOnError(err, "Failed to connect to rabbitmq server")
+	go func() {
+		for {
+			select {
+			case <-done:
+				err := conn.Close()
+				failOnError(err, "failed to close a connection")
+			}
+		}
+	}()
+	ch := openChannel(conn)
+	defer func(ch *amqp.Channel) {
+		err := ch.Close()
+		failOnError(err, "failed to close a channel")
+	}(ch)
 
-	ch, err := conn.Channel()
-	failOnError(err, "failed to open a channel")
 	err = ch.ExchangeDeclare(
 		rabbitmqChannelParams.exchange, // name
 		"topic",                        // type
@@ -48,17 +60,42 @@ func newChannel(done <-chan bool, wg *sync.WaitGroup, rabbitmqChannelParams rabb
 		false,                          // no-wait
 		nil,                            // arguments
 	)
-	failOnError(err, "Failed to declare an exchange")
 
+	if err != nil {
+		ch := openChannel(conn)
+		err = ch.ExchangeDeclarePassive(
+			rabbitmqChannelParams.exchange, // name
+			"topic",                        // type
+			true,                           // durable
+			false,                          // auto-deleted
+			false,                          // internal
+			false,                          // no-wait
+			nil,                            // arguments
+		)
+		failOnError(err, "Failed to declare an exchange")
+	}
 	_, errQueueDeclare := ch.QueueDeclare(
 		rabbitmqChannelParams.queue, // name
 		true,                        // durable
 		false,                       // delete when unused
-		true,                        // exclusive
+		false,                       // exclusive
 		false,                       // no-wait
 		nil,                         // arguments
 	)
-	failOnError(errQueueDeclare, "Failed to declare a queue")
+
+	if errQueueDeclare != nil {
+		ch := openChannel(conn)
+		_, errQueueDeclare := ch.QueueDeclarePassive(
+			rabbitmqChannelParams.queue, // name
+			true,                        // durable
+			false,                       // delete when unused
+			false,                       // exclusive
+			false,                       // no-wait
+			nil,                         // arguments
+		)
+		failOnError(errQueueDeclare, "Failed to declare a queue")
+	}
+
 	errQueueBind := ch.QueueBind(
 		rabbitmqChannelParams.queue,    // queue name
 		"",                             // routing key
@@ -82,6 +119,11 @@ func newChannel(done <-chan bool, wg *sync.WaitGroup, rabbitmqChannelParams rabb
 	rc.startInput()
 	rc.startOutput()
 	return rc
+}
+func openChannel(conn *amqp.Connection) *amqp.Channel {
+	ch, err := conn.Channel()
+	failOnError(err, "failed to open a channel")
+	return ch
 }
 func (rc rabbitmqChannel) GetMode() channel.Mode {
 	return rc.mode
@@ -113,7 +155,7 @@ func (rc rabbitmqChannel) startInput() {
 				case <-rc.done:
 					return
 				case msg := <-rc.inputChannel:
-					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:116",
+					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:158",
 						string(msg))
 					go func(msg []byte) {
 						defer rc.wg.Done()
@@ -166,7 +208,7 @@ func (rc rabbitmqChannel) startOutput() {
 				case <-rc.done:
 					return
 				case msg := <-msgs:
-					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:169",
+					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:211",
 						string(msg.Body))
 					rc.outputChannel <- msg.Body
 				}

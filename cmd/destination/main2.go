@@ -7,9 +7,6 @@ import (
 	rbbitmqadapter "github.com/ormushq/ormus/destination/newimplementation/channel/adapter/rabbitmq"
 	tasktype "github.com/ormushq/ormus/destination/newimplementation/task"
 	"github.com/ormushq/ormus/destination/newimplementation/taskmanager"
-	"github.com/ormushq/ormus/destination/newimplementation/worker"
-	"github.com/ormushq/ormus/destination/newimplementation/worker/handler/fakerworker"
-	"github.com/ormushq/ormus/destination/newimplementation/workermanager"
 	"github.com/ormushq/ormus/destination/taskservice"
 	"github.com/ormushq/ormus/destination/taskservice/adapter/idempotency/redistaskidempotency"
 	"github.com/ormushq/ormus/destination/taskservice/adapter/repository/inmemorytaskrepo"
@@ -90,40 +87,20 @@ func main() {
 
 	// We define all worker here
 	// for each task type we can register a worker instant
-	workers := map[tasktype.TaskType]worker.Instant{
-		tasktype.Fake:    fakerworker.New(done, &wg, taskService, 5),
-		tasktype.Webhook: fakerworker.New(done, &wg, taskService, 5),
+	taskTypes := []tasktype.TaskType{
+		tasktype.Fake,
+		tasktype.Webhook,
 	}
+
 	destinationConfig := config.C().Destination
 
 	channelConverter := channel.NewConverter(done, &wg)
-	//channelManager := channelmanager.New(done, &wg)
 	channelAdapter := rbbitmqadapter.New(done, &wg, destinationConfig.RabbitmqConnection)
-	//simpleChannelAdapter := simple.New(done, &wg)
 
 	channelAdapter.NewChannel(
 		destinationConfig.EventManager.RabbitMQEventManagerConnection.ProcessedEventChannelName,
 		channel.OutputOnly,
 		100, 5)
-
-	channelAdapter.NewChannel(
-		destinationConfig.EventManager.RabbitMQEventManagerConnection.DeliverTaskChannelName,
-		channel.InputOnlyMode,
-		100, 5)
-
-	//channelManager.RegisterChannelAdapter("rabbitmq", rabbitmqChannelAdapter)
-
-	// Event manager used for receive processed events from th core service
-	// and pass them to task service
-	// this adapter run multiple listeners on rabbitmq queue and it configurable
-	// from RabbitMQEventManagerConnection
-	//eventManager, eventManagerErr := eventmanager.New(done, &wg,
-	//	destinationConfig.EventManager.RabbitMQEventManagerConnection,
-	//	channelAdapter, 5)
-
-	//if eventManagerErr != nil {
-	//	log.Panicf("error in new event manager: %v", eventManagerErr)
-	//}
 
 	// Task manager adapter used for provide two channel
 	// one for consume and another one for publish
@@ -173,28 +150,13 @@ func main() {
 		log.Panicf("error in new taskManagerErr: %v", taskManagerErr)
 	}
 
-	// Worker manager managed the workers
-	// it watches workers if they crash try to recreate them for specific times
-	workerManager, workerManagerErr := workermanager.New(done, &wg, channelAdapter, channelConverter,
-		destinationConfig.TaskManager.ChannelPrefix,
-		destinationConfig.EventManager.RabbitMQEventManagerConnection.DeliverTaskChannelName)
-	if workerManagerErr != nil {
-		log.Panicf("error in new workerManager: %v", workerManagerErr)
+	for _, t := range taskTypes {
+		channelAdapter.NewChannel(taskmanager.GetTaskChannelName(destinationConfig.TaskManager.ChannelPrefix,
+			t), channel.InputOnlyMode, 100, 5)
 	}
 
-	// Here we register workers to the worker manager and create for them channels
-	// every task types has it own channel
-	for t, w := range workers {
-		taskManager.NewChannel(t, 100, 5)
-		registerWorkerErr := workerManager.RegisterWorker(t, w)
-		if registerWorkerErr != nil {
-			log.Panicf("error in new webhookWorkerErr: %v", registerWorkerErr)
-		}
-	}
-
-	//We just start task manager and worker manager
+	//We just start task manager
 	taskManager.Start()
-	workerManager.Start()
 
 	//----- Handling graceful shutdown  -----//
 
