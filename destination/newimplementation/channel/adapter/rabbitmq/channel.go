@@ -211,6 +211,7 @@ func (rc rabbitmqChannel) startOutput() {
 					fmt.Println("destination/newimplementation/channel/adapter/rabbitmq/channel.go:211",
 						string(msg.Body))
 					rc.outputChannel <- msg.Body
+					msg.Ack(false)
 				}
 
 			}
